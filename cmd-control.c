@@ -23,6 +23,10 @@
 
 #include "tmux.h"
 
+/* Debug output */
+//#define SHZ_DUMP_HISTORY
+//#define SHZ_DONT_COMPACT_HISTORY
+
 /* Space needed to store the hex representation of a UTF-8 cell. */
 #define CONTROL_HISTORY_UTF8_BUFFER_SIZE ((UTF8_SIZE) * 2 + 1)
 
@@ -132,6 +136,9 @@ control_history_compact_cells(struct control_history_cell *cells, int count)
 	       	cells[i].begins_new_context =
 		    (o == 0 ||
 		     !control_history_cells_equal(&cells[i], &cells[o - 1]));
+		#ifdef SHZ_DONT_COMPACT_HISTORY
+		cells[o++] = cells[i];
+		#else
 		if (o > 0 &&
 		    !cells[i].begins_new_context &&
 		    !strcmp(cells[i].encoded, cells[o - 1].encoded)) {
@@ -139,8 +146,22 @@ control_history_compact_cells(struct control_history_cell *cells, int count)
 		} else {
 			cells[o++] = cells[i];
 		}
+		#endif
 	}
 	return o;
+}
+
+// http://www.wangafu.net/~nickm/libevent-book/Ref7_evbuffer.html
+size_t evbuffer_dump(struct evbuffer *buf, char **record_out);
+size_t evbuffer_dump(struct evbuffer *buf, char **record_out)
+{
+	size_t buffer_len = evbuffer_get_length(buf);
+	char *record;
+	record = (char*)malloc(buffer_len);
+	if (record == NULL) return 0;
+	evbuffer_copyout(buf, record, buffer_len);
+	*record_out = record;
+	return buffer_len;
 }
 
 /* Print a single line of history to the client's stdout. */
@@ -189,6 +210,10 @@ control_history_print_line(struct cmd_ctx *ctx, struct grid_line *linedata)
 					    cells[i].bg);
 		}
 		len = strlen(cells[i].encoded);
+		if (len % 2) {
+			fprintf(stderr, "Odd number of characters in cell[i=%d]: '%s'\n",
+					i, cells[i].encoded);
+		}
 		iter = cells[i].repeats > 2 ? 1 : cells[i].repeats;
 		for (j = 0; j < iter; j++) {
 			evbuffer_add(ctx->curclient->stdout_data,
@@ -203,6 +228,16 @@ control_history_print_line(struct cmd_ctx *ctx, struct grid_line *linedata)
 	if (linedata->flags & GRID_LINE_WRAPPED)
 	    evbuffer_add(ctx->curclient->stdout_data, "+", 1);
 	evbuffer_add(ctx->curclient->stdout_data, "\n", 1);
+
+	#ifdef SHZ_DUMP_HISTORY
+	char *client_stdout_dump;
+	size_t dump_len = evbuffer_dump(ctx->curclient->stdout_data, &client_stdout_dump);
+	if (client_stdout_dump != NULL && dump_len > 0) {
+		fprintf(stderr, "__FUNCTION__(%ld characters): '%s'\n",
+				dump_len, client_stdout_dump);
+		free(client_stdout_dump);
+	}
+	#endif
 	server_push_stdout(ctx->curclient);
 	free(cells);
 }
